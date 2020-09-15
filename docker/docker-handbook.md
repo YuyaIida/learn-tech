@@ -77,7 +77,7 @@ CUIはコンテナIDの出力に長い文字列を出力するが、実際は最
 `docker start abcdefghijkl`
 
 以上を実行すると、何も起こらなかったように見えるが、出力ストリームに接続しなかったから。通常の実行時には、`STDIN`と`STDOUT`、`STDERR`が開かれる。
-コンテナの出力イメージに接続するには、-aオプションを使用するっっ必要がある。
+コンテナの出力イメージに接続するには、-aオプションを使用する必要がある。
 `docker start -a ab59dbf58b70`
 全てが正常に実行されると、その旨出力される
 `start`コマンドを使用して、まだ実行されていないコンテナを実行できる。
@@ -250,7 +250,146 @@ node_modulesディレクトリが上書きされないようにするために�
 このコマンドは繰り返し実行するには長すぎるので、絶対パスの代わりにシェルコマンドで代用する。
 `docker run -p 3000:3000 -v /usr/app/node_modules -v $(pwd):/usr/app d4fc36e848e9`
 
+### マルチステージビルド
+ここでは、Dockerv17.05で導入されたマルチステージビルドを取り扱う
+前のサブセクションでは、Dockerfile.devファイルを作成した。
+Vueまたは、Reactアプリケーションのプロダクションビルドを作成することは、多段階ビルドプロセスの完璧な例。
 
+ビルドプロセスには2つのステップがある。
+`npm run build`を実行すると、アプリケーションが一括りのjs, css, index.htmlにコンパイルされる。プロダクションビルドは、プロジェクトルートの/distディレクトリ内で利用できる。ただし、開発バージョンとは異なり、プロダクションビルドには手の込んだサーバが付属されていない。
+プロダクションファイルでサーバを立ち上げるには、Nginxを使用する必要がある。ステージ1でビルドされたファイルをNginxのドキュメントルートにコピーして、利用可能にする。
+前の2つのプロジェクトで行ったような手順を確認したい場合には、次のようになる。
+1. Nodeアプリケーションを実行できるベースイメージ(node)を使用する。
+2. package.jsonファイルをコピして、npm run installを実行して、依存関係をインストールする。
+3. 必要なプロジェクトファイルを全てコピーする。
+4. npm run buildを実行時てプロダクションビルドを作成する。
+5. 本番ファイルの実行を可能にする別のベースイメージ(nginx)を使用する。
+6. 本番ファイルを/distディレクトリからデフォルトのドキュメントルートにコピーする
 
+`FROM node as builder`
 
+`WORKDIR /usr/app`
 
+`COPY ./package.json ./`
+`RUN npm install`
+
+`COPY . .`
+
+`RUN npm run build`
+
+`FROM nginx`
+
+`COPY --from=builder /usr/app/dist /usr/share/nginx/html`
+
+複数のFROMが記述されている。マルチステージビルドプロセスでは、複数のFROMを使用することができる。最初のFROMは、nodeをベースイメージとして設定し、依存関係をインストールし、全てのプロジェクトファイルをコピーして、`npm run build`を実行する。最初のステージをbuilderと命名。
+2段階目では、ベースイメージとしてnginxを使用している。第1ステージで構築された/usr/app/distディレクトリから第2ステージのusr/share/nginx/htmlディレクトリに全てのファイルをコピーする。COPYの--fromオプションを使用すると、ステージ間でファイルのコピーができる。
+
+このマルチステージビルドプロセスからの出力イメージは、ビルドされたファイルのみを含むため、追加のデータを含まないNginxベースのイメージ。その結果、サイズが最適化され、軽量になっている。
+
+### ビルドされたイメージをDocker Hubにアップロードする
+
+ここでは、DockerHubへのpush方法について学ぶ。
+Dockerimageをアップロードするためには、タグをつける必要がある。
+buildコマンドで、-tオプションを使用して、タグをつけることができる。
+`docker build -t <タグ> <コンテキスト>`
+タグの一般的な規則は以下の通り
+`<DockernのID>/<image名>:<imageのver>`
+そして、imageをDockerHubへアップロードするには、pushコマンドを使用する。
+`docker push <DockerId>/<imageタグとversion>`
+このimageからコンテナを実行するための構文は以下の通り
+`docker run <DockerID>/<imageタグとversion>`
+
+### Docker Composeを使用したマルチコンテナアプリケーションの操作
+これまでは、一つのコンテナのみで構成されるアプリケーションを扱ってきた。
+次は、複数のコンテナを持つアプリケーションを想定する。DB, バックエンドAPI, フロントAppを一緒に使用する必要があるアプリケーションが想定される。
+Docker-composeを使用する。
+Dockerのドキュメントによると、下記のように記述されている。
+Composeは、マルチコンテナのDockerアプリを定義して実行するツール。
+Composeでは、YAMLファイルを使用してアプリケーションを設定する。
+Composeはすべての環境で機能するが、開発とテストに重点を置いているため、本番環境でComposeを使用することはおすすめしない。
+
+### Docker Composeの基本
+note-apiディレクトリで作業を行う。
+これは、ノートの作成、読み取り、更新、削除を行うCRUDAPIです。
+`FROM node:lts`
+
+`WORKDIR /usr/app`
+
+`COPY ./package.json .`
+`RUN npm install`
+
+`COPY . .`
+
+`CMD [ "npm", "run", "dev" ]`
+
+package.jsonファイルをコピーして、依存関係をインストールし、プロジェクトファイルをコピーして、npm run devでサーバを起動する。
+
+Composeの使用は、基本的に3つのステップ
+
+1. Dockerfileを使用し、アプリを定義するのでどこでも再現可能
+2. アプリを構成するサービスをdocker-compose.ymlで定義して、隔離された環境で一緒に実行できるようになる。
+3. docker-compose upを実行すると、Composeが起動し、アプリ全体が実行される。
+
+サービスは基本的に、いくつかの追加要素を持つコンテナです。最初のymlファイルを書き始める前に必要なものをリストアップしてみよう
+
+1. api プロジェクトルートのDockerfile.devを使用して実行されるExpressアプリケーションコンテナ
+2. db 公式のpostgresイメージを使用して、実行されるPostgreSQLインスタンス
+
+プロジェクトルートで新しいdocker-compose.ymlファイルを作成して、最初のサービスを定義してみよう。
+```
+version 3.8
+
+services:
+    db:
+        image: postgres:12
+        volumes:
+            - ./docker-entrypoint-initdb.d:/docker-entorypoint-initdb.d
+        environment:
+            POSTGRES_PASSWORD: iasdjffasdfas
+            POSTGRES_DB: notesdb
+```
+すべての有効なdocker-compose.ymlファイルは、ファイルバージョンを定義することから始まる。
+YMLファイル内のブロックは、インデントによって定義される。
+servicesブロックは、アプリケーション内の各サービスまたはコンテナの定義を保持する。dbはservicesブロック内のサービス
+dbブロックはアプリケーションの新しいサービスを定義し、コンテナを開始するために必要な情報を保持する。
+コンテナを実行するには、すべてのサービスに事前に構築されたイメージまたはDockerfileが必要。dbサービスには、公式のPostgreSQLイメージを使用している。
+プロジェクトルートのdocker-entrypoint-initdb.dディレクトリには、データベースのテーブルをセットアップするためのSQLファイルが含まれている。
+このディレクトリは、初期化スクリプトを保持するためのもの。
+docker-compose.ymlファイル内のディレクトリをコピーする方法はないため
+、ボリュームを使用する必要がある。
+
+environmentブロックは環境変数を保持する。有効な環境変数リストは、DockerHubのimagepageに保存されている？？
+POSTGRES_PASSWORD変数は、サーバのデフォルトパスワードの設定を行い、POSTGRES_DBは指定された名前でDBの作成を行う。
+
+次に、apiサービスを追加する。インデントをdbサービスと一緒にする
+
+```
+インデント調整
+
+    api:
+        build:
+            context .
+            dockerfile: Dockerfile.dev
+        volumes:
+            - /usr/app/node_modules
+            - ./:/usr/app
+        ports:
+            - 3000:3000
+        environment:
+            DB_CONNECTION: pg
+            DB_HOST: db # データベースサービス名と同じ名前を使用
+            DB_PORT: 5432
+            DB_USER: postgres
+            DB_DATABASE: notesdb
+            DB_PASSWORD: iasdjffasdfas
+```
+
+apiサービス用のビルドイメージは存在しないが、Dockerfile.devがある。buildブロックは、ビルドのContextと使用するDockerfileのfilenameを定義する。ファイル名がDockerfileの場合、filenameは不要
+
+ボリュームのマッピングは、前のセクションで見たものと同様。node_modulesディレクトリ用の匿名ボリュームとプロジェクトルート用の名前付きボリューム
+
+ポートマッピングも前のセクションと同じように機能する。構文は<ホストシステムポート>:<コンテナポート>
+environmentブロックでは、DB接続のセットアップに必要な情報を定義している。Knex.jsをORMとして使用して、DBに接続するための情報を定義している。DB_POSTとDB_USERに関しては、postgreSQLサーバのデフォルト。DB_DATABASEとDB_PASSWORDはdbサービスと一致する必要がある。DB_CONNECTION: pgはPostgreSQLを使用していることをORMに示す。
+docker-compose.ymlファイルで定義されている全てのサービスは、サービス名を使用してホストとして使用できる。そのため、apiサービスは、127.0.0.1のようなアドレスではなくホストとして扱うことで、実際にdbサービスに接続できる。そのため、DB_HOSTの値はdbとしている。
+
+docker-compose.ymmlが完成したので、アプリケーションを起動する
