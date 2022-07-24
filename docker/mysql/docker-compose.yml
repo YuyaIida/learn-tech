@@ -11,8 +11,8 @@ services:
       MYSQL_USER: bike_user
       MYSQL_PASSWORD: bike_password
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
-    expose:
-      - '3306'
+    ports:
+      - '3306:3306'
     volumes:
       - './db/data:/var/lib/mysql'
       - './db/conf.d:/etc/mysql/conf.d'
