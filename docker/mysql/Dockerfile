@@ -1,7 +1,10 @@
-FROM node:16.3.0-alpine
+FROM node:16.3.0
 WORKDIR .
 COPY package*.json ./
-RUN npm install --only=production
+RUN npm install
 COPY . .
 EXPOSE 8080
-CMD [ "node", "src/server.js" ]
+RUN npm run prisma:init
+RUN npm run prisma:generate
+RUN npm run build
+CMD [ "npm", "run", "start" ]
